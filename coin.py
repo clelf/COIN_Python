@@ -35,15 +35,16 @@ from matplotlib.cm import get_cmap
 from tqdm import trange
 
 import multiprocessing
+import functools
 
-from utils.general_utils import (
+from .utils.general_utils import (
     sample_num_tables_CRF, 
     per_slice_invert, 
     per_slice_multiply, 
     log_sum_exp, 
     systematic_resampling, 
 )
-from utils.distribution_utils import (
+from .utils.distribution_utils import (
     random_dirichlet, 
     stationary_distribution, 
     random_truncated_bivariate_normal, 
@@ -251,6 +252,9 @@ class COIN:
             fig_dir = "figures"
         self.fig_dir = fig_dir
         
+    def parallel_coin_main_loop(self, n, trials):
+        return self.coin_main_loop(trials)["stored"]
+    
     def simulate_coin(self):
         if self.cues is not None:
             self.check_cue_labels()
@@ -268,17 +272,18 @@ class COIN:
         if (self.adaptation is None) or (len(self.adaptation) == 0):
             trials = np.arange(num_trials)
             
-            print("Simulting the COIN model")
+            print("Simulating the COIN model")
             
-            parallel_coin_main_loop = lambda n: self.coin_main_loop(trials)["stored"]
             
-            # with multiprocessing.Pool(processes=self.max_cores) as pool:
-            #     results = pool.map(parallel_coin_main_loop, range(self.runs))
-            # temp = results
-            with trange(self.runs, dynamic_ncols=True) as pbar:
-                for n in pbar:
-                    coin_state = self.coin_main_loop(trials)
-                    temp.append(coin_state["stored"])
+            # TODO: uncomment next lines to run with parallel processing pools
+            parallel_function = functools.partial(self.parallel_coin_main_loop)
+            with multiprocessing.Pool(processes=self.max_cores) as pool:
+                results = pool.starmap(parallel_function, [(n, trials) for n in range(self.runs)])
+            temp = results
+            # with trange(self.runs, dynamic_ncols=True) as pbar:
+            #     for n in pbar:
+            #         coin_state = self.coin_main_loop(trials)
+            #         temp.append(coin_state["stored"])
 
             w = np.ones(self.runs) / self.runs
             
@@ -414,7 +419,7 @@ class COIN:
         coin_state["n_context"] = np.zeros((self.max_contexts + 1, self.max_contexts + 1, self.particles), dtype=int)
         
         # sampled context
-        coin_state["context"] = np.ones((self.particles, ), dtype=int) # note that 0 is the first context (instead of 1 as in James' code)
+        coin_state["context"] = np.ones((self.particles, ), dtype=int) # note that 0 is the first context (instead of 1 as in James' code) # TODO: check context numbering?
         
         # do cues exist?
         if self.cues is None:
@@ -446,6 +451,8 @@ class COIN:
         return coin_state
     
     def predict_context(self, coin_state: Dict[str, Any]):
+        # Predict context probabilities based on transitions between contexts, using both prior state information 
+        # and cues
         if (coin_state["trial"]-1) in self.stationary_trials:
             for p in range(self.particles):
                 C = np.sum(coin_state["local_transition_matrix"][:, 0, p] > 0)
@@ -675,7 +682,7 @@ class COIN:
         
         coin_state["p_new_x"] = np.where(coin_state["context"] > coin_state["C"])[0]
         coin_state["p_old_x"] = np.where(coin_state["context"] <= coin_state["C"])[0]
-        coin_state["C"][coin_state["p_new_x"]] = coin_state["C"][coin_state["p_new_x"]] + 1
+        coin_state["C"][coin_state["p_new_x"]] = coin_state["C"][coin_state["p_new_x"]] + 1 # increment
         
         p_beta_x = coin_state["p_new_x"][coin_state["C"][coin_state["p_new_x"]] != self.max_contexts]
         inds = coin_state["context"][p_beta_x] - 1
@@ -701,6 +708,7 @@ class COIN:
         return coin_state
     
     def update_belief_about_states(self, coin_state: Dict[str, Any]):
+        # Supp info algo 3 - propagate sufficient statistics for the states
         coin_state["Kalman_gains"] = coin_state["state_var"] / coin_state["state_feedback_var"]
         if coin_state["feedback_observed"][coin_state["trial"]-1]:
             coin_state["state_filtered_mean"] = coin_state["state_mean"] + coin_state["Kalman_gains"] * coin_state["prediction_error"] * coin_state["H"][coin_state["context"]-1, :].T
@@ -722,7 +730,7 @@ class COIN:
         g = coin_state["retention"] * coin_state["previous_state_filtered_var"] / coin_state["state_var"]
         m = coin_state["previous_state_filtered_mean"] + g * (coin_state["state_filtered_mean"] - coin_state["state_mean"])
         v = coin_state["previous_state_filtered_var"] + g * (coin_state["state_filtered_var"] - coin_state["state_var"]) * g
-        coin_state["previous_x_dynamics"] = m + np.sqrt(v) * np.random.randn(self.max_contexts+1, self.particles)
+        coin_state["previous_x_dynamics"] = m + np.emath.sqrt(v) * np.random.randn(self.max_contexts+1, self.particles)
         
         # sample x_t conitioned on x_{t-1} and y_t
         if coin_state["feedback_observed"][coin_state["trial"]-1]:
@@ -733,7 +741,7 @@ class COIN:
         else:
             w = (coin_state["retention"] * coin_state["previous_x_dynamics"] + coin_state["drift"]) / np.square(self.sigma_process_noise)
             v = 1 / (1 / np.square(self.sigma_process_noise))
-        coin_state["x_dynamics"] = v * w + np.sqrt(v) * np.random.randn(self.max_contexts+1, self.particles)
+        coin_state["x_dynamics"] = v * w + np.emath.sqrt(v) * np.random.randn(self.max_contexts+1, self.particles)
         
         x_sample_novel = coin_state["state_filtered_mean"][inds_new_x[0], inds_new_x[1]] + np.sqrt(coin_state["state_filtered_var"][inds_new_x[0], inds_new_x[1]]) * \
             np.random.randn(n_new_x)
@@ -1072,6 +1080,15 @@ class COIN:
         SS = x_a[..., None] * x_a[:, :, None, :]
         coin_state["dynamics_ss_2"] = coin_state['dynamics_ss_2'] + SS * I[..., None, None]
         
+        # Make sure the variables are not complex and if yes convert them back to np.float64
+        # np.float64(x)
+        assert ~(np.imag(coin_state["dynamics_ss_1"]) != 0).any()
+        assert ~(np.imag(coin_state["dynamics_ss_2"]) != 0).any()
+        if coin_state["dynamics_ss_1"].dtype == np.complex128 and ~(np.imag(coin_state["dynamics_ss_1"]) != 0).any():
+            coin_state["dynamics_ss_1"] = np.float64(coin_state["dynamics_ss_1"])
+        if coin_state["dynamics_ss_2"].dtype == np.complex128 and ~(np.imag(coin_state["dynamics_ss_2"]) != 0).any():
+            coin_state["dynamics_ss_2"] = np.float64(coin_state["dynamics_ss_2"])
+
         return coin_state
     
     def update_sufficient_statistics_bias(self, coin_state: Dict[str, Any]):

@@ -20,7 +20,7 @@ along with COIN_Python. If not, see <https://www.gnu.org/licenses/>.
 
 import numpy as np
 
-from utils.general_utils import (
+from .general_utils import (
     per_slice_cholesky, 
     per_slice_multiply, 
 )

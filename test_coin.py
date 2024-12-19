@@ -1,8 +1,12 @@
+# %%
+
+
 import numpy as np
 import matplotlib.pyplot as plt
 
 from coin import COIN
 
+# %%
 
 def main():
     coin_model = COIN() # use default parameters for now
@@ -18,10 +22,12 @@ def main():
     plt.plot(output["runs"][0]["state_feedback"], "b.", label="state feedback")
     plt.plot(output["runs"][0]["motor_output"], "r", label="motor output")
     plt.legend()
-    plt.savefig("figures/temp_test.png")
+    # plt.savefig("figures/temp_test.png")
     
     return output
 
 
 if __name__=="__main__":
     output = main()
+
+# %%
