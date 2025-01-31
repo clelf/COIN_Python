@@ -272,7 +272,7 @@ class COIN:
         if (self.adaptation is None) or (len(self.adaptation) == 0):
             trials = np.arange(num_trials)
             
-            print("Simulating the COIN model")
+            # print("Simulating the COIN model")
             
             
             # TODO: uncomment next lines to run with parallel processing pools
