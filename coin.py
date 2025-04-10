@@ -78,7 +78,7 @@ class COIN:
         runs
             runs (int): number of runs, each conditioned on a different state feedback sequence
         parallel processing of runs
-            max_cores (int): maximum number of CPU cores available (0 implements serial processing of runs)
+            max_cores (int): maximum number of CPU cores available (0 implements serial processing of runs) # NOTE: not sure 0 works  
         model implementation
             particles (int): number of particles
             max_contexts (int): maximum number of contexts that can be instantiated
