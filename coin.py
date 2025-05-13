@@ -78,7 +78,8 @@ class COIN:
         runs
             runs (int): number of runs, each conditioned on a different state feedback sequence
         parallel processing of runs
-            max_cores (int): maximum number of CPU cores available (0 implements serial processing of runs)
+            parallel_processing (bool): to use or not parallel processing over runs
+            max_cores (int): maximum number of CPU cores available (1 implements serial processing of runs)
         model implementation
             particles (int): number of particles
             max_contexts (int): maximum number of contexts that can be instantiated
@@ -110,7 +111,7 @@ class COIN:
             plot_average_bias (bool): plot average bias (mean of the average bias distribution across contexts)
             plot_state_feedback (bool): plot predicted state feedback distribution (average state feedback distribution across contexts)
             plot_explicit_component (bool): plot explicit component of learning
-            plot_implicit_component (bool): plot implicit component learning TODO: what is this?
+            plot_implicit_component (bool): plot implicit component learning
             plot_Kalman_gain_given_cstar1 (bool): plot Kalman_gain|context with highest responsibility on current trial (cstar1)
             plot_predicted_probability_cstar1 (bool): plot predicted probability of contextwith highest responsibility on current trial (cstar1)
             plot_state_given_cstar1 (bool): plot state|context with highest responsibility on current trial (cstar1)
@@ -208,6 +209,7 @@ class COIN:
         self.runs = runs
         
         self.max_cores = max_cores
+        if self.max_cores == 1: self.parallel_processing = False
         
         self.particles = particles
         self.max_contexts = max_contexts
@@ -272,18 +274,18 @@ class COIN:
         if (self.adaptation is None) or (len(self.adaptation) == 0):
             trials = np.arange(num_trials)
             
-            # print("Simulating the COIN model")
+            print("Simulating the COIN model")
             
-            
-            # TODO: uncomment next lines to run with parallel processing pools
-            parallel_function = functools.partial(self.parallel_coin_main_loop)
-            with multiprocessing.Pool(processes=self.max_cores) as pool:
-                results = pool.starmap(parallel_function, [(n, trials) for n in range(self.runs)])
-            temp = results
-            # with trange(self.runs, dynamic_ncols=True) as pbar:
-            #     for n in pbar:
-            #         coin_state = self.coin_main_loop(trials)
-            #         temp.append(coin_state["stored"])
+            if self.parallel_processing:
+                parallel_function = functools.partial(self.parallel_coin_main_loop)
+                with multiprocessing.Pool(processes=self.max_cores) as pool:
+                    results = pool.starmap(parallel_function, [(n, trials) for n in range(self.runs)])
+                temp = results
+            else:
+                with trange(self.runs, dynamic_ncols=True) as pbar:
+                    for n in pbar:
+                        coin_state = self.coin_main_loop(trials)
+                        temp.append(coin_state["stored"])
 
             w = np.ones(self.runs) / self.runs
             
@@ -327,7 +329,7 @@ class COIN:
                     
                 # update weights and normalise
                 l_w = log_likelihood + np.log(w)
-                l_w = l_w - log_sum_exp(l_w, axis=1) # TODO: check this!
+                l_w = l_w - log_sum_exp(l_w, axis=1)
                 w = np.exp(l_w)
                 
                 # calculate effect sample size
@@ -419,7 +421,7 @@ class COIN:
         coin_state["n_context"] = np.zeros((self.max_contexts + 1, self.max_contexts + 1, self.particles), dtype=int)
         
         # sampled context
-        coin_state["context"] = np.ones((self.particles, ), dtype=int) # note that 0 is the first context (instead of 1 as in James' code) # TODO: check context numbering?
+        coin_state["context"] = np.ones((self.particles, ), dtype=int) # note that 0 is the first context (instead of 1 as in James' code)
         
         # do cues exist?
         if self.cues is None:
@@ -613,12 +615,12 @@ class COIN:
                 # log p(c_t)
                 p_c = np.log(coin_state["prior_probabilities"])
         
-        log_weights = log_sum_exp(p_c) # TODO: verify if this is indeed log p(y_t, q_t)
+        log_weights = log_sum_exp(p_c)
 
         p_c = p_c - log_weights # log p(c_t|y_t, q_t)
         
         # weights for resampling
-        w = np.exp(log_weights - log_sum_exp(log_weights.T, axis=0)) # TODO: again, verify if this holds true!
+        w = np.exp(log_weights - log_sum_exp(log_weights.T, axis=0))
         
         # draw indices of particles to propagate
         if (coin_state["feedback_observed"][coin_state["trial"]-1]) or (coin_state["cues_exist"]):
@@ -746,7 +748,7 @@ class COIN:
         x_sample_novel = coin_state["state_filtered_mean"][inds_new_x[0], inds_new_x[1]] + np.sqrt(coin_state["state_filtered_var"][inds_new_x[0], inds_new_x[1]]) * \
             np.random.randn(n_new_x)
         
-        coin_state["x_bias"] = np.concatenate([coin_state["x_dynamics"][inds_old_x[0], inds_old_x[1]], x_sample_novel], axis=-1) # TODO: check the dimensions!
+        coin_state["x_bias"] = np.concatenate([coin_state["x_dynamics"][inds_old_x[0], inds_old_x[1]], x_sample_novel], axis=-1)
         coin_state["inds_observed"] = [
             np.concatenate([inds_old_x[0], inds_new_x[0]]), 
             np.concatenate([inds_old_x[1], inds_new_x[1]]), 
@@ -887,7 +889,6 @@ class COIN:
                 m_context_bar[inds_1, inds_2, inds_3] = coin_state["m_context"][inds_1, inds_2, inds_3] - \
                     np.random.binomial(coin_state["m_context"][inds_1, inds_2, inds_3], p)
             
-            # TODO: what is this line doing?
             m_context_bar[0, 0, m_context_bar[0, 0, :] == 0] = 1
             
             # sample beta
@@ -1007,7 +1008,6 @@ class COIN:
             x = np.reshape(self.state_values, (1, 1, self.state_values.size))
             mu = coin_state["state_mean"]
             std = np.sqrt(coin_state["state_var"])
-            # TODO: check the dimensions!
             coin_state["state_distribution"] = np.sum(coin_state["predicted_probabilities"][..., None] * norm(mu[..., None], std[..., None]).pdf(x), axis=(0, 1)) / self.particles
         
         if "bias_distribution" in self.store:
@@ -1307,7 +1307,6 @@ class COIN:
         
         for n in range(self.runs):
             p = self.particles * n + np.arange(self.particles)
-            # TODO: check the dimensions!
             inds_resampled[p, :] = self.particles * n + S["runs"][n]["inds_resampled"]
         
         return inds_resampled
@@ -1501,7 +1500,6 @@ class COIN:
         # predictive distribution
         if trial < (num_trials-1):
             if self.plot_state_given_context:
-                # TODO: check the dimensions!
                 S["runs"][run]["state_mean"][optimal_assignment, particle, trial+1] = S["runs"][run]["state_mean"][:C, particle, trial+1]
                 S["runs"][run]["state_var"][optimal_assignment, particle, trial+1] = S["runs"][run]["state_var"][:C, particle, trial+1]
             if self.plot_predicted_probabilities:
@@ -1509,7 +1507,6 @@ class COIN:
         
         if self.plot_responsibilities:
             if (trial == 0) or novel_context:
-                # TODO: check below for the dimensions for C
                 S["runs"][run]["responsibilities"][np.concatenate([np.arange(C-1), np.array([C])]), particle, trial] = \
                     S["runs"][run]["responsibilities"][optimal_assignment, particle, trial]
                 S["runs"][run]["responsibilities"][C-1, particle, trial] = np.nan
@@ -1536,7 +1533,7 @@ class COIN:
     
     def permute_transition_matrix_columns_and_rows(self, transmat: np.ndarray, optimal_assignment: np.ndarray):
         C = len(optimal_assignment)
-        # inverse mapping (TODO: verify the dimensions == C)
+        # inverse mapping
         inds_map = np.equal(optimal_assignment[:, None], np.arange(C)[None])
         
         inds_1 = np.tile(inds_map[:, None], [1, C+1])
@@ -1567,7 +1564,6 @@ class COIN:
             if self.plot_state_given_context:
                 mu = np.transpose(S["runs"][run]["state_mean"][:(C+1), particles, trial+1][..., None], [2, 1, 0])
                 sd = np.transpose(np.sqrt(S["runs"][run]["state_var"][:(C+1), particles, trial+1][..., None]), [2, 1, 0])
-                # TODO: check the dimensions!
                 P["state_given_context"][:, trial+1, np.concatenate([np.arange(C), np.array([novel_context])]), run] = \
                     np.sum(norm(mu, sd).pdf(self.state_values[:, None, None]), axis=1)
             if self.plot_predicted_probabilities:
@@ -1581,7 +1577,6 @@ class COIN:
             P["stationary_probabilities"][trial, np.concatenate([np.arange(C), np.array([novel_context])]), run] = \
                 np.sum(S["runs"][run]["stationary_probabilities"][:(C+1), particles, trial], axis=1)
         if self.plot_retention_given_context:
-            # TODO: verify the dimensions!
             mu = np.transpose(S["runs"][run]["dynamics_mean"][0, :C, particles, trial], [1, 0])
             std = np.transpose(np.sqrt(S["runs"][run]["dynamics_mean"][0, 0, :C, particles, trial]), [1, 0])
             P["retention_given_context"][:, trial, :C, run] = np.sum(norm(mu, std).pdf(self.retention_values), axis=1)
@@ -2187,7 +2182,6 @@ class COIN:
         C["marginal"] = [208/255, 149/255, 213/255]
         C["mean_of_marginal"] = [54/255, 204/255, 255/255]
         if (self.cues is not None) and len(self.cues) > 0:
-            # TODO: verify this!
             C["cues"] = get_cmap("copper", np.max(self.cues))
 
         return C
